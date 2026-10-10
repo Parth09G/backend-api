@@ -1,0 +1,5937 @@
+openapi: 3.1.0
+info:
+  title: Billing & Inventory API
+  version: 1.0.0
+  description: 'REST API for the construction-material billing and inventory system (Go backend on Railway, Supabase PostgreSQL).
+
+
+    * Auth: send the Supabase Auth access token as `Authorization: Bearer <jwt>`. The API verifies it against the project
+    JWKS and loads the role from app.app_user.
+
+    * Money, rates and quantities are **decimal strings**, never JSON numbers.
+
+    * Errors use RFC 9457 `application/problem+json` with a stable `code`.
+
+    * Document-creating POSTs require an `Idempotency-Key` header. Bill edits and cancels require `If-Match` with the bill
+    version.
+
+    * `x-roles` on each operation lists the roles allowed.'
+servers:
+- url: https://api.example.in/api/v1
+  description: Production (Railway)
+- url: http://localhost:8080/api/v1
+  description: Local
+security:
+- supabaseJwt: []
+tags:
+- name: System
+  description: Health, current user, lookups, global search and job status
+- name: Users
+  description: Invite and manage users (Supabase Auth + app.app_user)
+- name: Settings
+  description: Shop profile, e-invoice credentials, Tally mapping
+- name: Locations
+  description: Shop and godowns
+- name: Catalogue
+  description: Units, categories, category attributes
+- name: Items
+  description: Products, stock per location, stock ledger, price hints
+- name: Parties
+  description: Customers and dealers, ledgers, statements
+- name: Bills
+  description: Cash and Account bills, edits, cancellations, Account copies, PDF, e-invoice, e-way bill
+- name: Payments
+  description: Receipts and dealer payments, cheques
+- name: Returns
+  description: Sales returns and credit notes with approval
+- name: Purchases
+  description: Dealer purchases and purchase returns
+- name: Stock
+  description: Transfers, adjustments and physical counts
+- name: Dashboard
+  description: Dashboard widgets
+- name: Reports
+  description: Reports and exports
+- name: Notifications
+  description: Alerts for users
+- name: Tally
+  description: Tally import and export
+- name: Audit
+  description: Audit log
+paths:
+  /health:
+    get:
+      tags:
+      - System
+      summary: Liveness and database check
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  db:
+                    type: string
+                  version:
+                    type: string
+  /me:
+    get:
+      tags:
+      - System
+      summary: Current user, role and permission keys
+      operationId: getMe
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /search:
+    get:
+      tags:
+      - System
+      summary: Global search across items, customers and bills (command palette)
+      operationId: globalSearch
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/Q'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResult'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /lookups/states:
+    get:
+      tags:
+      - System
+      summary: GST state codes and names
+      operationId: listStates
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    code:
+                      $ref: '#/components/schemas/StateCode'
+                    name:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /jobs/{id}:
+    get:
+      tags:
+      - System
+      summary: Status of a background job (imports, exports, large reports)
+      operationId: getJob
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /users:
+    get:
+      tags:
+      - Users
+      summary: List users
+      operationId: listUsers
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags:
+      - Users
+      summary: Invite a user (creates Supabase Auth user + profile, sends invite email)
+      operationId: inviteUser
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserInvite'
+      responses:
+        '201':
+          description: Invited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /users/{id}:
+    patch:
+      tags:
+      - Users
+      summary: Update name, mobile or role
+      operationId: updateUser
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatch'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /users/{id}/deactivate:
+    post:
+      tags:
+      - Users
+      summary: Deactivate user (blocks API immediately; last Super Admin cannot be deactivated)
+      operationId: deactivateUser
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /users/{id}/reactivate:
+    post:
+      tags:
+      - Users
+      summary: Reactivate user
+      operationId: reactivateUser
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /users/{id}/password-reset:
+    post:
+      tags:
+      - Users
+      summary: Send password-reset email
+      operationId: sendPasswordReset
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /settings:
+    get:
+      tags:
+      - Settings
+      summary: Shop settings
+      operationId: getSettings
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    put:
+      tags:
+      - Settings
+      summary: Update shop settings
+      operationId: updateSettings
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /settings/logo:
+    put:
+      tags:
+      - Settings
+      summary: Upload shop logo (PNG/JPG, max 1 MB)
+      operationId: uploadLogo
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required:
+              - file
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /settings/einvoice-credentials:
+    put:
+      tags:
+      - Settings
+      summary: Store GSP/ASP credentials (write-only; stored encrypted)
+      operationId: setEInvoiceCredentials
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EInvoiceCredentials'
+      responses:
+        '204':
+          description: Done
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /settings/einvoice-credentials/test:
+    post:
+      tags:
+      - Settings
+      summary: Test GSP login
+      operationId: testEInvoiceCredentials
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /settings/tally-mapping:
+    get:
+      tags:
+      - Settings
+      summary: Tally ledger and voucher-type mapping
+      operationId: getTallyMapping
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TallyMapping'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    put:
+      tags:
+      - Settings
+      summary: Update Tally mapping
+      operationId: updateTallyMapping
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TallyMapping'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TallyMapping'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /locations:
+    get:
+      tags:
+      - Locations
+      summary: List shop and godowns
+      operationId: listLocations
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Location'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Locations
+      summary: Add a location
+      operationId: createLocation
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocationInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Location'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /locations/{id}:
+    patch:
+      tags:
+      - Locations
+      summary: Update a location
+      operationId: updateLocation
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocationInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Location'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /units:
+    get:
+      tags:
+      - Catalogue
+      summary: List units
+      operationId: listUnits
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Unit'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Catalogue
+      summary: Create a unit
+      operationId: createUnit
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Unit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /units/{id}:
+    patch:
+      tags:
+      - Catalogue
+      summary: Rename a unit
+      operationId: updateUnit
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Unit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /categories:
+    get:
+      tags:
+      - Catalogue
+      summary: List categories with units and attributes
+      operationId: listCategories
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - name: include_inactive
+        in: query
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Catalogue
+      summary: Create category with its units and attributes (wizard)
+      operationId: createCategory
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /categories/{id}:
+    get:
+      tags:
+      - Catalogue
+      summary: Get category
+      operationId: getCategory
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags:
+      - Catalogue
+      summary: Update category name, defaults, units
+      operationId: updateCategory
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /categories/{id}/deactivate:
+    post:
+      tags:
+      - Catalogue
+      summary: Deactivate category (only when it has no active items)
+      operationId: deactivateCategory
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /categories/{id}/attributes:
+    post:
+      tags:
+      - Catalogue
+      summary: Add an attribute to a category
+      operationId: addCategoryAttribute
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryAttributeInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryAttribute'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /categories/{id}/attributes/{attrId}:
+    patch:
+      tags:
+      - Catalogue
+      summary: Update an attribute
+      operationId: updateCategoryAttribute
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/AttrIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryAttributeInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryAttribute'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags:
+      - Catalogue
+      summary: Remove an attribute (only if no item uses it)
+      operationId: deleteCategoryAttribute
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/AttrIdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /categories/{id}/import-template:
+    get:
+      tags:
+      - Catalogue
+      summary: Excel template whose columns follow this category's attributes
+      operationId: getItemImportTemplate
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Excel file
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /items:
+    get:
+      tags:
+      - Items
+      summary: List / search items with stock (inventory grid)
+      operationId: listItems
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/Q'
+      - name: category_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/Id'
+      - $ref: '#/components/parameters/LocationId'
+      - name: stock_status
+        in: query
+        schema:
+          type: string
+          enum:
+          - ok
+          - low
+          - out
+      - name: attr
+        in: query
+        schema:
+          type: object
+          properties: {}
+          additionalProperties:
+            type: string
+        description: Attribute filters, e.g. attr[brand]=Tata&attr[size]=12 mm
+        style: deepObject
+        explode: true
+      - name: include_inactive
+        in: query
+        schema:
+          type: boolean
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Items
+      summary: Create item (optional opening stock per location)
+      operationId: createItem
+      x-roles:
+      - super_admin
+      - admin
+      description: 'Validates attributes against the category definition and rejects duplicates (DUPLICATE).
+
+
+        Super Admin and Admin.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /items/{id}:
+    get:
+      tags:
+      - Items
+      summary: Get item with stock per location
+      operationId: getItem
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags:
+      - Items
+      summary: Update item (unit factors locked once the item has transactions)
+      operationId: updateItem
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /items/{id}/deactivate:
+    post:
+      tags:
+      - Items
+      summary: Deactivate item
+      operationId: deactivateItem
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /items/{id}/movements:
+    get:
+      tags:
+      - Items
+      summary: Item stock ledger
+      operationId: listItemMovements
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/LocationId'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StockMovement'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /items/{id}/price-hints:
+    get:
+      tags:
+      - Items
+      summary: 'Rate hints for billing: last rate to this customer, recent rates, last purchase rate, average cost'
+      operationId: getPriceHints
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/PartyId'
+      - name: unit_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceHints'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /items/import:
+    post:
+      tags:
+      - Items
+      summary: Bulk import items from Excel (async)
+      operationId: importItems
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                category_id:
+                  $ref: '#/components/schemas/Id'
+                dry_run:
+                  type: boolean
+              required:
+              - file
+              - category_id
+      responses:
+        '202':
+          description: Accepted; poll /jobs/{id}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /parties:
+    get:
+      tags:
+      - Parties
+      summary: List customers and dealers
+      operationId: listParties
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/Q'
+      - name: kind
+        in: query
+        schema:
+          type: string
+          enum:
+          - customer
+          - supplier
+          - both
+      - name: with_balance
+        in: query
+        schema:
+          type: string
+          enum:
+          - any
+          - receivable
+          - payable
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Party'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Parties
+      summary: Create customer or dealer
+      operationId: createParty
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartyInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /parties/{id}:
+    get:
+      tags:
+      - Parties
+      summary: Get party with balance and sites
+      operationId: getParty
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags:
+      - Parties
+      summary: Update party
+      operationId: updateParty
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartyInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /parties/{id}/deactivate:
+    post:
+      tags:
+      - Parties
+      summary: Deactivate party
+      operationId: deactivateParty
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /parties/{id}/ledger:
+    get:
+      tags:
+      - Parties
+      summary: Ledger with running balance
+      operationId: getPartyLedger
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ledger'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /parties/{id}/statement:
+    get:
+      tags:
+      - Parties
+      summary: Statement of account PDF (signed download link)
+      operationId: getPartyStatement
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedUrl'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /bills:
+    get:
+      tags:
+      - Bills
+      summary: List bills
+      operationId: listBills
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - name: bill_type
+        in: query
+        schema:
+          type: string
+          enum:
+          - cash
+          - account
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - draft
+          - active
+          - cancelled
+      - name: payment_status
+        in: query
+        schema:
+          type: string
+          enum:
+          - paid
+          - partial
+          - unpaid
+      - name: einvoice_status
+        in: query
+        schema:
+          type: string
+          enum:
+          - not_required
+          - pending
+          - generated
+          - failed
+          - cancelled
+      - $ref: '#/components/parameters/PartyId'
+      - $ref: '#/components/parameters/LocationId'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/Q'
+      - name: unlinked_account_bills
+        in: query
+        schema:
+          type: boolean
+        description: Account bills not copied from a Cash bill (stock review)
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BillSummary'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Bills
+      summary: Create a bill (draft, or active = save + post stock and ledger)
+      operationId: createBill
+      x-roles:
+      - super_admin
+      - admin
+      description: 'For an active Cash bill the server, in one transaction, numbers the bill, deducts stock at each line''s
+        location and posts the ledger and payments. If stock is short it returns 422 INSUFFICIENT_STOCK with the short lines
+        and raises a Super Admin reorder alert. Account bills never touch stock. B2B active bills queue e-invoice generation
+        (einvoice.status = pending).
+
+
+        Super Admin and Admin.'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BillInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bill'
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Bill version, send back as If-Match when editing
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          description: 'Business rule failure: INSUFFICIENT_STOCK or CREDIT_LIMIT_EXCEEDED'
+          content:
+            application/problem+json:
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/InsufficientStockProblem'
+                - $ref: '#/components/schemas/CreditLimitProblem'
+  /bills/calculate:
+    post:
+      tags:
+      - Bills
+      summary: Calculate taxes and totals without saving (live preview while typing)
+      operationId: calculateBill
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BillInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lines:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BillLine'
+                  charges:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BillCharge'
+                  totals:
+                    $ref: '#/components/schemas/BillTotals'
+                  stock_warnings:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ShortLine'
+                  credit_warning:
+                    oneOf:
+                    - $ref: '#/components/schemas/CreditLimitProblem'
+                    - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /bills/{id}:
+    get:
+      tags:
+      - Bills
+      summary: Get bill with lines, totals, payments, e-invoice and allowed actions
+      operationId: getBill
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bill'
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Bill version, send back as If-Match when editing
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags:
+      - Bills
+      summary: Update a draft, or edit an active bill
+      operationId: updateBill
+      x-roles:
+      - super_admin
+      - admin
+      description: 'Drafts: any user, reason optional. Active bills: Super Admin only, reason required. The server stores
+        the old version in revisions, reverses old stock/ledger, applies the new version, and if an IRN exists cancels and
+        regenerates it. Rejected with 409 EINVOICE_WINDOW_CLOSED when the IRN is older than 24 hours (use a credit note).
+
+
+        Super Admin and Admin.'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BillEditInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bill'
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Bill version, send back as If-Match when editing
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          description: 'Business rule failure: INSUFFICIENT_STOCK or CREDIT_LIMIT_EXCEEDED'
+          content:
+            application/problem+json:
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/InsufficientStockProblem'
+                - $ref: '#/components/schemas/CreditLimitProblem'
+    delete:
+      tags:
+      - Bills
+      summary: Delete a draft (active bills are cancelled, never deleted)
+      operationId: deleteDraftBill
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /bills/{id}/finalize:
+    post:
+      tags:
+      - Bills
+      summary: Turn a draft into an active bill
+      operationId: finalizeBill
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bill'
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Bill version, send back as If-Match when editing
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          description: 'Business rule failure: INSUFFICIENT_STOCK or CREDIT_LIMIT_EXCEEDED'
+          content:
+            application/problem+json:
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/InsufficientStockProblem'
+                - $ref: '#/components/schemas/CreditLimitProblem'
+  /bills/{id}/cancel:
+    post:
+      tags:
+      - Bills
+      summary: Cancel bill (reverses stock and ledger; cancels IRN if within 24 h)
+      operationId: cancelBill
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bill'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+  /bills/{id}/copy-to-account:
+    post:
+      tags:
+      - Bills
+      summary: Create an Account bill from this Cash bill
+      operationId: copyToAccount
+      x-roles:
+      - super_admin
+      - admin
+      description: 'Only for active Cash bills without an active Account copy. The copy keeps source_bill_id, never changes
+        stock and does not post to the ledger or sales again.
+
+
+        Super Admin and Admin.'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CopyToAccountInput'
+      responses:
+        '201':
+          description: Account bill created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bill'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /bills/{id}/revisions:
+    get:
+      tags:
+      - Bills
+      summary: Version history of an edited bill
+      operationId: listBillRevisions
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BillRevision'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /bills/{id}/pdf:
+    get:
+      tags:
+      - Bills
+      summary: Invoice PDF (signed link; regenerated after edits)
+      operationId: getBillPdf
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - name: copy
+        in: query
+        schema:
+          type: string
+          enum:
+          - original
+          - duplicate
+          - triplicate
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedUrl'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /bills/{id}/share:
+    post:
+      tags:
+      - Bills
+      summary: WhatsApp share link with PDF URL and message text
+      operationId: shareBill
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  whatsapp_url:
+                    type: string
+                    format: uri
+                  pdf_url:
+                    type: string
+                    format: uri
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /bills/{id}/einvoice:
+    post:
+      tags:
+      - Bills
+      summary: Generate or retry e-invoice (IRN)
+      operationId: generateEInvoice
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EInvoice'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /bills/{id}/einvoice/cancel:
+    post:
+      tags:
+      - Bills
+      summary: Cancel IRN (only within 24 hours of generation)
+      operationId: cancelEInvoice
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonInput'
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EInvoice'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /bills/{id}/ewaybill:
+    post:
+      tags:
+      - Bills
+      summary: Generate e-way bill
+      operationId: generateEWayBill
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                vehicle_no:
+                  type: string
+                transport_mode:
+                  type: string
+                  enum:
+                  - road
+                  - rail
+                  - air
+                  - ship
+                distance_km:
+                  type: integer
+                transporter_id:
+                  type: string
+              required:
+              - vehicle_no
+              - distance_km
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EInvoice'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /payments:
+    get:
+      tags:
+      - Payments
+      summary: List receipts and dealer payments
+      operationId: listPayments
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - name: direction
+        in: query
+        schema:
+          type: string
+          enum:
+          - received
+          - paid
+      - name: mode
+        in: query
+        schema:
+          type: string
+          enum:
+          - cash
+          - upi
+          - cheque
+          - bank_transfer
+      - name: cheque_status
+        in: query
+        schema:
+          type: string
+          enum:
+          - pending
+          - cleared
+          - bounced
+      - $ref: '#/components/parameters/PartyId'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Payment'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Payments
+      summary: Record payment received or paid, with optional allocation to bills/purchases
+      operationId: createPayment
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /payments/{id}:
+    get:
+      tags:
+      - Payments
+      summary: Get payment
+      operationId: getPayment
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /payments/{id}/cheque-status:
+    post:
+      tags:
+      - Payments
+      summary: Mark cheque cleared or bounced (bounce reopens the amount and logs a ledger reversal)
+      operationId: setChequeStatus
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum:
+                  - cleared
+                  - bounced
+                date:
+                  type: string
+                  format: date
+                notes:
+                  type: string
+              required:
+              - status
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /payments/{id}/cancel:
+    post:
+      tags:
+      - Payments
+      summary: Cancel payment
+      operationId: cancelPayment
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /payments/{id}/receipt:
+    get:
+      tags:
+      - Payments
+      summary: Receipt PDF (signed link)
+      operationId: getReceiptPdf
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedUrl'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /returns:
+    get:
+      tags:
+      - Returns
+      summary: List sales returns / credit notes
+      operationId: listReturns
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - pending
+          - approved
+          - rejected
+          - cancelled
+      - $ref: '#/components/parameters/PartyId'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CreditNote'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Returns
+      summary: Create a sales return (pending until Super Admin approves; auto-approved when created by Super Admin)
+      operationId: createReturn
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditNote'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /returns/{id}:
+    get:
+      tags:
+      - Returns
+      summary: Get return
+      operationId: getReturn
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditNote'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /returns/{id}/approve:
+    post:
+      tags:
+      - Returns
+      summary: 'Approve: number credit note, restore stock (Cash bills, restockable lines), credit ledger or refund, queue
+        e-invoice'
+      operationId: approveReturn
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditNote'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /returns/{id}/reject:
+    post:
+      tags:
+      - Returns
+      summary: Reject a pending return
+      operationId: rejectReturn
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditNote'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /returns/{id}/pdf:
+    get:
+      tags:
+      - Returns
+      summary: Credit note PDF (signed link)
+      operationId: getReturnPdf
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedUrl'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /purchases:
+    get:
+      tags:
+      - Purchases
+      summary: List purchases
+      operationId: listPurchases
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/PartyId'
+      - $ref: '#/components/parameters/LocationId'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/Q'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Purchase'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Purchases
+      summary: Record purchase from a dealer into a godown/shop (adds stock, updates average cost, credits dealer)
+      operationId: createPurchase
+      x-roles:
+      - super_admin
+      - admin
+      description: 'Rejects a repeated dealer invoice number for the same dealer with 409 DUPLICATE.
+
+
+        Super Admin and Admin.'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchaseInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Purchase'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /purchases/{id}:
+    get:
+      tags:
+      - Purchases
+      summary: Get purchase
+      operationId: getPurchase
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Purchase'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /purchases/{id}/cancel:
+    post:
+      tags:
+      - Purchases
+      summary: Cancel purchase (only if the stock has not been sold; otherwise use a purchase return)
+      operationId: cancelPurchase
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Purchase'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/InsufficientStock'
+  /purchase-returns:
+    post:
+      tags:
+      - Purchases
+      summary: Return goods to a dealer (reduces stock)
+      operationId: createPurchaseReturn
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchaseReturnInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+                  doc_no:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/InsufficientStock'
+  /stock-transfers:
+    get:
+      tags:
+      - Stock
+      summary: List transfers
+      operationId: listTransfers
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/LocationId'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Transfer'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Stock
+      summary: Move stock between shop and godowns
+      operationId: createTransfer
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/InsufficientStock'
+  /stock-transfers/{id}:
+    get:
+      tags:
+      - Stock
+      summary: Get transfer note
+      operationId: getTransfer
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /stock-adjustments:
+    get:
+      tags:
+      - Stock
+      summary: List adjustments
+      operationId: listAdjustments
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/LocationId'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Adjustment'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      tags:
+      - Stock
+      summary: Adjust stock with a reason
+      operationId: createAdjustment
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdjustmentInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Adjustment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/InsufficientStock'
+  /stock-counts/preview:
+    post:
+      tags:
+      - Stock
+      summary: Compare counted quantities with system stock
+      operationId: previewStockCount
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StockCountInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockCountPreview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /stock-counts:
+    post:
+      tags:
+      - Stock
+      summary: Post a physical count as adjustments (reason count_correction)
+      operationId: postStockCount
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StockCountInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Adjustment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /dashboard/summary:
+    get:
+      tags:
+      - Dashboard
+      summary: 'Headline cards: stock, sales, profit, receivables, payables'
+      operationId: getDashboardSummary
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /dashboard/sales-trend:
+    get:
+      tags:
+      - Dashboard
+      summary: Sales and profit by day or month
+      operationId: getSalesTrend
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - name: bucket
+        in: query
+        schema:
+          type: string
+          enum:
+          - day
+          - month
+      - name: bill_type
+        in: query
+        schema:
+          type: string
+          enum:
+          - cash
+          - account
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TrendPoint'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /dashboard/categories:
+    get:
+      tags:
+      - Dashboard
+      summary: Category breakdown
+      operationId: getCategoryBreakdown
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/LocationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryBreakdown'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /dashboard/top-items:
+    get:
+      tags:
+      - Dashboard
+      summary: Fast- or slow-moving items
+      operationId: getTopItems
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - name: kind
+        in: query
+        schema:
+          type: string
+          enum:
+          - fast
+          - slow
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          maximum: 50
+          default: 10
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TopItem'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /dashboard/low-stock:
+    get:
+      tags:
+      - Dashboard
+      summary: Items at or below reorder level, and out of stock
+      operationId: getLowStock
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/LocationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Item'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /dashboard/pending:
+    get:
+      tags:
+      - Dashboard
+      summary: Pending work counters
+      operationId: getPendingWork
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingWork'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /reports/{key}:
+    get:
+      tags:
+      - Reports
+      summary: Run a report as JSON, or download as Excel/PDF
+      operationId: runReport
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+          - sales-register
+          - bill-type-register
+          - item-sales
+          - category-sales
+          - gst-b2b
+          - gst-b2c
+          - gst-hsn-summary
+          - gst-credit-notes
+          - einvoice-status
+          - purchase-register
+          - input-gst
+          - stock-summary
+          - stock-movement
+          - transfers
+          - adjustments
+          - receivables-ageing
+          - payables-ageing
+          - collections
+          - payments-made
+          - profit
+          - edits-cancellations
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/LocationId'
+      - name: category_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/Id'
+      - $ref: '#/components/parameters/PartyId'
+      - name: format
+        in: query
+        schema:
+          type: string
+          enum:
+          - json
+          - xlsx
+          - pdf
+        description: json returns rows; xlsx/pdf return a signed link, or 202 + job for large ranges
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Rows (json) or signed link (xlsx/pdf)
+          content:
+            application/json:
+              schema:
+                anyOf:
+                - type: object
+                  properties:
+                    columns:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          key:
+                            type: string
+                          label:
+                            type: string
+                          type:
+                            type: string
+                            enum:
+                            - text
+                            - money
+                            - qty
+                            - date
+                            - percent
+                    rows:
+                      type: array
+                      items:
+                        type: object
+                        properties: {}
+                        additionalProperties: true
+                    totals:
+                      type: object
+                      properties: {}
+                      additionalProperties: true
+                    meta:
+                      $ref: '#/components/schemas/PageMeta'
+                - $ref: '#/components/schemas/SignedUrl'
+        '202':
+          description: Large export queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /notifications:
+    get:
+      tags:
+      - Notifications
+      summary: My notifications (role broadcasts + personal)
+      operationId: listNotifications
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - name: unread_only
+        in: query
+        schema:
+          type: boolean
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /notifications/{id}/read:
+    post:
+      tags:
+      - Notifications
+      summary: Mark as read
+      operationId: markNotificationRead
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /notifications/read-all:
+    post:
+      tags:
+      - Notifications
+      summary: Mark all as read
+      operationId: markAllNotificationsRead
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      responses:
+        '204':
+          description: Done
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /tally/imports:
+    post:
+      tags:
+      - Tally
+      summary: Upload Tally XML/Excel and get a preview (nothing written yet)
+      operationId: previewTallyImport
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                cutover_date:
+                  type: string
+                  format: date
+                scope:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                    - groups
+                    - units
+                    - items
+                    - customers
+                    - suppliers
+                    - opening_stock
+                    - opening_balances
+              required:
+              - file
+              - cutover_date
+      responses:
+        '201':
+          description: Preview ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TallyImportPreview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /tally/imports/{id}/commit:
+    post:
+      tags:
+      - Tally
+      summary: Apply a previewed import (all-or-nothing)
+      operationId: commitTallyImport
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                location_map:
+                  type: object
+                  properties: {}
+                  additionalProperties:
+                    $ref: '#/components/schemas/Id'
+                  description: Tally godown name → location id
+                unit_map:
+                  type: object
+                  properties: {}
+                  additionalProperties:
+                    $ref: '#/components/schemas/Id'
+      responses:
+        '202':
+          description: Import running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /tally/exports:
+    post:
+      tags:
+      - Tally
+      summary: Export vouchers/masters to Tally XML (incremental by default)
+      operationId: createTallyExport
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TallyExportInput'
+      responses:
+        '202':
+          description: Export running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /tally/syncs:
+    get:
+      tags:
+      - Tally
+      summary: Import / export history
+      operationId: listTallySyncs
+      x-roles:
+      - super_admin
+      - admin
+      description: Super Admin and Admin.
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TallySync'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /audit-log:
+    get:
+      tags:
+      - Audit
+      summary: Search the audit log
+      operationId: listAuditLog
+      x-roles:
+      - super_admin
+      description: '**Super Admin only.**'
+      parameters:
+      - name: user_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: entity
+        in: query
+        schema:
+          type: string
+      - name: entity_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/Id'
+      - name: action
+        in: query
+        schema:
+          type: string
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEntry'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+                required:
+                - data
+                - meta
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+components:
+  securitySchemes:
+    supabaseJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Supabase Auth access token, verified with https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    UserIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AttrIdPath:
+      name: attrId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Sort:
+      name: sort
+      in: query
+      schema:
+        type: string
+      description: Field name, prefix with - for descending, e.g. -bill_date
+    Q:
+      name: q
+      in: query
+      schema:
+        type: string
+      description: Free-text search (trigram)
+    From:
+      name: from
+      in: query
+      schema:
+        type: string
+        format: date
+    To:
+      name: to
+      in: query
+      schema:
+        type: string
+        format: date
+    LocationId:
+      name: location_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/Id'
+    PartyId:
+      name: party_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/Id'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: New UUID per user action. A retry with the same key returns the original result instead of creating a duplicate
+        document.
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Current bill version as an ETag, e.g. "3". Rejected with 412 VERSION_MISMATCH if someone else changed it.
+  responses:
+    BadRequest:
+      description: Validation failed (VALIDATION_FAILED)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthenticated:
+      description: Missing or invalid Supabase access token (UNAUTHENTICATED)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Role not allowed (FORBIDDEN)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Not found (NOT_FOUND)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: State or uniqueness conflict (CONFLICT, DUPLICATE, INVALID_STATE, EDIT_NOT_ALLOWED, EINVOICE_WINDOW_CLOSED)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionFailed:
+      description: Bill changed since it was loaded (VERSION_MISMATCH)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InsufficientStock:
+      description: Stock is short at the chosen location; bill not saved; Super Admin alerted (INSUFFICIENT_STOCK)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/InsufficientStockProblem'
+    CreditLimit:
+      description: Customer credit limit exceeded (CREDIT_LIMIT_EXCEEDED)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/CreditLimitProblem'
+  schemas:
+    Money:
+      type: string
+      pattern: ^-?\d{1,12}(\.\d{1,2})?$
+      description: Rupee amount as a decimal string (never a float), e.g. "12500.50"
+      examples:
+      - '12500.50'
+    Rate:
+      type: string
+      pattern: ^\d{1,10}(\.\d{1,4})?$
+      description: Rate or cost as a decimal string, up to 4 decimals
+      examples:
+      - '62.5000'
+    Quantity:
+      type: string
+      pattern: ^-?\d{1,11}(\.\d{1,3})?$
+      description: Quantity as a decimal string, up to 3 decimals
+      examples:
+      - '1.500'
+    Percent:
+      type: string
+      pattern: ^\d{1,3}(\.\d{1,2})?$
+      examples:
+      - '18'
+    Id:
+      type: integer
+      format: int64
+      minimum: 1
+    GSTIN:
+      type: string
+      pattern: ^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$
+      examples:
+      - 29ABCDE1234F1Z5
+    StateCode:
+      type: string
+      pattern: ^\d{2}$
+      description: GST state code
+      examples:
+      - '29'
+    GstRate:
+      type: string
+      enum:
+      - '0'
+      - '0.25'
+      - '3'
+      - '5'
+      - '12'
+      - '18'
+      - '28'
+      - '40'
+      description: GST rate % as string
+    PageMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+      required:
+      - page
+      - page_size
+      - total
+    Problem:
+      type: object
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+          enum:
+          - VALIDATION_FAILED
+          - UNAUTHENTICATED
+          - FORBIDDEN
+          - NOT_FOUND
+          - CONFLICT
+          - VERSION_MISMATCH
+          - DUPLICATE
+          - INSUFFICIENT_STOCK
+          - CREDIT_LIMIT_EXCEEDED
+          - EDIT_NOT_ALLOWED
+          - EINVOICE_WINDOW_CLOSED
+          - INVALID_STATE
+          - IDEMPOTENCY_REPLAY_MISMATCH
+          - RATE_LIMITED
+          - INTERNAL
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                description: JSON pointer-ish path, e.g. lines[2].qty
+              message:
+                type: string
+        request_id:
+          type: string
+      required:
+      - title
+      - status
+      - code
+      description: RFC 9457 problem details with a stable machine-readable code
+    ShortLine:
+      type: object
+      properties:
+        line_no:
+          type: integer
+        item_id:
+          $ref: '#/components/schemas/Id'
+        item_name:
+          type: string
+        location_id:
+          $ref: '#/components/schemas/Id'
+        location_name:
+          type: string
+        required:
+          $ref: '#/components/schemas/Quantity'
+        available:
+          $ref: '#/components/schemas/Quantity'
+        unit:
+          type: string
+        available_elsewhere:
+          type: array
+          items:
+            type: object
+            properties:
+              location_id:
+                $ref: '#/components/schemas/Id'
+              location_name:
+                type: string
+              qty:
+                $ref: '#/components/schemas/Quantity'
+    InsufficientStockProblem:
+      allOf:
+      - $ref: '#/components/schemas/Problem'
+      - type: object
+        properties:
+          short_lines:
+            type: array
+            items:
+              $ref: '#/components/schemas/ShortLine'
+          alert_sent:
+            type: boolean
+            description: Super Admin reorder alert was raised
+    CreditLimitProblem:
+      allOf:
+      - $ref: '#/components/schemas/Problem'
+      - type: object
+        properties:
+          credit_limit:
+            $ref: '#/components/schemas/Money'
+          outstanding:
+            $ref: '#/components/schemas/Money'
+          this_bill:
+            $ref: '#/components/schemas/Money'
+    ReasonInput:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
+      required:
+      - reason
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - item_import
+          - tally_import
+          - tally_export
+          - report_export
+          - einvoice
+        status:
+          type: string
+          enum:
+          - queued
+          - running
+          - succeeded
+          - failed
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        result_url:
+          oneOf:
+          - type: string
+            format: uri
+          - type: 'null'
+        error:
+          oneOf:
+          - type: string
+          - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+        finished_at:
+          oneOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+      required:
+      - id
+      - kind
+      - status
+    SignedUrl:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+      required:
+      - url
+      - expires_at
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        mobile:
+          oneOf:
+          - type: string
+          - type: 'null'
+        role:
+          type: string
+          enum:
+          - super_admin
+          - admin
+        is_active:
+          type: boolean
+        last_login_at:
+          oneOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - full_name
+      - email
+      - role
+      - is_active
+    Me:
+      allOf:
+      - $ref: '#/components/schemas/User'
+      - type: object
+        properties:
+          permissions:
+            type: array
+            items:
+              type: string
+            description: Flattened permission keys the UI uses to show/hide actions, e.g. bill.edit, bill.cancel, return.approve
+    UserInvite:
+      type: object
+      properties:
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        mobile:
+          type: string
+        role:
+          type: string
+          enum:
+          - super_admin
+          - admin
+      required:
+      - full_name
+      - email
+      - role
+    UserPatch:
+      type: object
+      properties:
+        full_name:
+          type: string
+        mobile:
+          type: string
+        role:
+          type: string
+          enum:
+          - super_admin
+          - admin
+    Settings:
+      type: object
+      properties:
+        shop_name:
+          type: string
+        address:
+          type: string
+        state_code:
+          $ref: '#/components/schemas/StateCode'
+        gstin:
+          $ref: '#/components/schemas/GSTIN'
+        phone:
+          type: string
+        email:
+          type: string
+        logo_url:
+          oneOf:
+          - type: string
+          - type: 'null'
+        bank_name:
+          type: string
+        bank_account_no:
+          type: string
+        bank_ifsc:
+          type: string
+        upi_id:
+          type: string
+        invoice_terms:
+          type: string
+        prices_include_gst:
+          type: boolean
+        default_charge_gst:
+          $ref: '#/components/schemas/GstRate'
+        einvoice_enabled:
+          type: boolean
+        number_prefixes:
+          type: object
+          properties: {}
+          additionalProperties:
+            type: string
+        notification_channels:
+          type: object
+          properties:
+            email:
+              type: boolean
+            whatsapp:
+              type: boolean
+            whatsapp_number:
+              type: string
+      required:
+      - shop_name
+      - address
+      - state_code
+      - gstin
+    EInvoiceCredentials:
+      type: object
+      properties:
+        provider:
+          type: string
+        environment:
+          type: string
+          enum:
+          - sandbox
+          - production
+        username:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+        client_id:
+          type: string
+        client_secret:
+          type: string
+          writeOnly: true
+      required:
+      - provider
+      - environment
+      - username
+      - password
+    TallyMapping:
+      type: object
+      properties:
+        sales_ledger_cash:
+          type: string
+        sales_ledger_account:
+          type: string
+        cgst_ledger:
+          type: string
+        sgst_ledger:
+          type: string
+        igst_ledger:
+          type: string
+        labour_ledger:
+          type: string
+        transport_ledger:
+          type: string
+        round_off_ledger:
+          type: string
+        cash_ledger:
+          type: string
+        bank_ledger:
+          type: string
+        purchase_ledger:
+          type: string
+        voucher_type_cash:
+          type: string
+        voucher_type_account:
+          type: string
+    Location:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+          - shop
+          - godown
+        address:
+          oneOf:
+          - type: string
+          - type: 'null'
+        is_default_billing:
+          type: boolean
+        is_active:
+          type: boolean
+      required:
+      - id
+      - name
+      - kind
+    LocationInput:
+      type: object
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+          - shop
+          - godown
+        address:
+          type: string
+        is_default_billing:
+          type: boolean
+      required:
+      - name
+      - kind
+    Unit:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+        symbol:
+          type: string
+        uqc_code:
+          oneOf:
+          - type: string
+          - type: 'null'
+        decimals:
+          type: integer
+          minimum: 0
+          maximum: 3
+      required:
+      - id
+      - name
+      - symbol
+      - decimals
+    UnitInput:
+      type: object
+      properties:
+        name:
+          type: string
+        symbol:
+          type: string
+        uqc_code:
+          type: string
+        decimals:
+          type: integer
+          minimum: 0
+          maximum: 3
+      required:
+      - name
+      - symbol
+    CategoryAttribute:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        code:
+          type: string
+          pattern: ^[a-z][a-z0-9_]*$
+        label:
+          type: string
+        data_type:
+          type: string
+          enum:
+          - text
+          - number
+          - select
+        options:
+          type: array
+          items:
+            type: string
+        value_unit:
+          oneOf:
+          - type: string
+          - type: 'null'
+        is_required:
+          type: boolean
+        part_of_name:
+          type: boolean
+        sort_order:
+          type: integer
+      required:
+      - id
+      - code
+      - label
+      - data_type
+    CategoryAttributeInput:
+      type: object
+      properties:
+        code:
+          type: string
+          pattern: ^[a-z][a-z0-9_]*$
+        label:
+          type: string
+        data_type:
+          type: string
+          enum:
+          - text
+          - number
+          - select
+        options:
+          type: array
+          items:
+            type: string
+        value_unit:
+          oneOf:
+          - type: string
+          - type: 'null'
+        is_required:
+          type: boolean
+        part_of_name:
+          type: boolean
+        sort_order:
+          type: integer
+      required:
+      - code
+      - label
+      - data_type
+    Category:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+        parent_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+        default_hsn:
+          oneOf:
+          - type: string
+          - type: 'null'
+        default_gst:
+          oneOf:
+          - $ref: '#/components/schemas/GstRate'
+          - type: 'null'
+        description:
+          oneOf:
+          - type: string
+          - type: 'null'
+        is_active:
+          type: boolean
+        tally_group:
+          oneOf:
+          - type: string
+          - type: 'null'
+        units:
+          type: array
+          items:
+            type: object
+            properties:
+              unit:
+                $ref: '#/components/schemas/Unit'
+              is_default:
+                type: boolean
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryAttribute'
+        item_count:
+          type: integer
+      required:
+      - id
+      - name
+      - is_active
+    CategoryInput:
+      type: object
+      properties:
+        name:
+          type: string
+        parent_id:
+          $ref: '#/components/schemas/Id'
+        default_hsn:
+          type: string
+        default_gst:
+          $ref: '#/components/schemas/GstRate'
+        description:
+          type: string
+        tally_group:
+          type: string
+        units:
+          type: array
+          items:
+            type: object
+            properties:
+              unit_id:
+                $ref: '#/components/schemas/Id'
+              new_unit:
+                $ref: '#/components/schemas/UnitInput'
+              is_default:
+                type: boolean
+            description: Give unit_id for an existing unit, or new_unit to create one on the spot
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryAttributeInput'
+      required:
+      - name
+      description: 'Category wizard: create category, its units and attributes in one call'
+    ItemUnit:
+      type: object
+      properties:
+        unit_id:
+          $ref: '#/components/schemas/Id'
+        symbol:
+          type: string
+        factor_to_base:
+          $ref: '#/components/schemas/Rate'
+      required:
+      - unit_id
+      - factor_to_base
+    StockByLocation:
+      type: object
+      properties:
+        location_id:
+          $ref: '#/components/schemas/Id'
+        location_name:
+          type: string
+        qty:
+          $ref: '#/components/schemas/Quantity'
+      required:
+      - location_id
+      - qty
+    Item:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        category_id:
+          $ref: '#/components/schemas/Id'
+        category_name:
+          type: string
+        name:
+          type: string
+        attributes:
+          type: object
+          properties: {}
+          additionalProperties:
+            type:
+            - string
+            - number
+        sku:
+          oneOf:
+          - type: string
+          - type: 'null'
+        hsn_code:
+          type: string
+        gst_rate:
+          $ref: '#/components/schemas/GstRate'
+        base_unit:
+          $ref: '#/components/schemas/Unit'
+        units:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemUnit'
+        reorder_level:
+          $ref: '#/components/schemas/Quantity'
+        avg_cost:
+          $ref: '#/components/schemas/Rate'
+        last_purchase_rate:
+          oneOf:
+          - $ref: '#/components/schemas/Rate'
+          - type: 'null'
+        is_active:
+          type: boolean
+        stock_total:
+          $ref: '#/components/schemas/Quantity'
+        stock:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockByLocation'
+        stock_value:
+          $ref: '#/components/schemas/Money'
+        stock_status:
+          type: string
+          enum:
+          - ok
+          - low
+          - out
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - category_id
+      - name
+      - hsn_code
+      - gst_rate
+      - base_unit
+      - stock_total
+      - stock_status
+    ItemInput:
+      type: object
+      properties:
+        category_id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+          description: Optional; built from attributes when omitted
+        attributes:
+          type: object
+          properties: {}
+          additionalProperties:
+            type:
+            - string
+            - number
+        sku:
+          type: string
+        hsn_code:
+          type: string
+        gst_rate:
+          $ref: '#/components/schemas/GstRate'
+        base_unit_id:
+          $ref: '#/components/schemas/Id'
+        units:
+          type: array
+          items:
+            type: object
+            properties:
+              unit_id:
+                $ref: '#/components/schemas/Id'
+              factor_to_base:
+                $ref: '#/components/schemas/Rate'
+            required:
+            - unit_id
+            - factor_to_base
+        reorder_level:
+          $ref: '#/components/schemas/Quantity'
+        opening_stock:
+          type: array
+          items:
+            type: object
+            properties:
+              location_id:
+                $ref: '#/components/schemas/Id'
+              qty:
+                $ref: '#/components/schemas/Quantity'
+              unit_cost:
+                $ref: '#/components/schemas/Rate'
+            required:
+            - location_id
+            - qty
+          description: Only accepted on create
+      required:
+      - category_id
+      - attributes
+      - hsn_code
+      - gst_rate
+      - base_unit_id
+    StockMovement:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        date:
+          type: string
+          format: date-time
+        location_id:
+          $ref: '#/components/schemas/Id'
+        location_name:
+          type: string
+        kind:
+          type: string
+          enum:
+          - opening
+          - purchase
+          - purchase_return
+          - sale
+          - sale_reversal
+          - sales_return
+          - transfer_out
+          - transfer_in
+          - adjustment
+        qty_in:
+          $ref: '#/components/schemas/Quantity'
+        qty_out:
+          $ref: '#/components/schemas/Quantity'
+        balance:
+          $ref: '#/components/schemas/Quantity'
+        unit_cost:
+          $ref: '#/components/schemas/Rate'
+        ref_type:
+          type: string
+        ref_id:
+          $ref: '#/components/schemas/Id'
+        ref_no:
+          type: string
+        user_name:
+          type: string
+      required:
+      - id
+      - date
+      - kind
+      - qty_in
+      - qty_out
+    PriceHints:
+      type: object
+      properties:
+        last_rate_to_customer:
+          oneOf:
+          - type: object
+            properties:
+              rate:
+                $ref: '#/components/schemas/Money'
+              unit:
+                type: string
+              bill_no:
+                type: string
+              date:
+                type: string
+                format: date
+          - type: 'null'
+        recent_rates:
+          type: array
+          items:
+            type: object
+            properties:
+              rate:
+                $ref: '#/components/schemas/Money'
+              unit:
+                type: string
+              customer:
+                type: string
+              date:
+                type: string
+                format: date
+        last_purchase_rate:
+          oneOf:
+          - $ref: '#/components/schemas/Rate'
+          - type: 'null'
+        avg_cost:
+          $ref: '#/components/schemas/Rate'
+        unit:
+          type: string
+      description: Shown while billing because there is no fixed selling price
+    Party:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        kind:
+          type: string
+          enum:
+          - customer
+          - supplier
+          - both
+        name:
+          type: string
+        mobile:
+          oneOf:
+          - type: string
+          - type: 'null'
+        alt_phone:
+          oneOf:
+          - type: string
+          - type: 'null'
+        gstin:
+          oneOf:
+          - $ref: '#/components/schemas/GSTIN'
+          - type: 'null'
+        state_code:
+          oneOf:
+          - $ref: '#/components/schemas/StateCode'
+          - type: 'null'
+        billing_address:
+          oneOf:
+          - type: string
+          - type: 'null'
+        pincode:
+          oneOf:
+          - type: string
+          - type: 'null'
+        credit_limit:
+          oneOf:
+          - $ref: '#/components/schemas/Money'
+          - type: 'null'
+        opening_balance:
+          $ref: '#/components/schemas/Money'
+        balance:
+          $ref: '#/components/schemas/Money'
+        sites:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                $ref: '#/components/schemas/Id'
+              label:
+                type: string
+              address:
+                type: string
+        notes:
+          oneOf:
+          - type: string
+          - type: 'null'
+        is_active:
+          type: boolean
+      required:
+      - id
+      - kind
+      - name
+      - balance
+      - is_active
+    PartyInput:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+          - customer
+          - supplier
+          - both
+        name:
+          type: string
+          minLength: 2
+        mobile:
+          type: string
+        alt_phone:
+          type: string
+        gstin:
+          $ref: '#/components/schemas/GSTIN'
+        state_code:
+          $ref: '#/components/schemas/StateCode'
+        billing_address:
+          type: string
+        pincode:
+          type: string
+        credit_limit:
+          $ref: '#/components/schemas/Money'
+        opening_balance:
+          $ref: '#/components/schemas/Money'
+        opening_date:
+          type: string
+          format: date
+        notes:
+          type: string
+        sites:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              address:
+                type: string
+            required:
+            - label
+            - address
+      required:
+      - kind
+      - name
+    LedgerEntry:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        date:
+          type: string
+          format: date
+        ref_type:
+          type: string
+        ref_id:
+          $ref: '#/components/schemas/Id'
+        ref_no:
+          type: string
+        narration:
+          type: string
+        debit:
+          $ref: '#/components/schemas/Money'
+        credit:
+          $ref: '#/components/schemas/Money'
+        balance:
+          $ref: '#/components/schemas/Money'
+      required:
+      - date
+      - debit
+      - credit
+      - balance
+    Ledger:
+      type: object
+      properties:
+        party:
+          $ref: '#/components/schemas/Party'
+        opening:
+          $ref: '#/components/schemas/Money'
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEntry'
+        closing:
+          $ref: '#/components/schemas/Money'
+    PaymentSplitInput:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+          - cash
+          - upi
+          - cheque
+          - bank_transfer
+        amount:
+          $ref: '#/components/schemas/Money'
+        reference:
+          type: string
+        cheque_no:
+          type: string
+        cheque_date:
+          type: string
+          format: date
+        bank_name:
+          type: string
+      required:
+      - mode
+      - amount
+    BillLineInput:
+      type: object
+      properties:
+        item_id:
+          $ref: '#/components/schemas/Id'
+        location_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+          description: Required for Cash bills; defaults to the default billing location
+        qty:
+          $ref: '#/components/schemas/Quantity'
+        unit_id:
+          $ref: '#/components/schemas/Id'
+        rate:
+          $ref: '#/components/schemas/Money'
+        discount_pct:
+          $ref: '#/components/schemas/Percent'
+        discount_amt:
+          $ref: '#/components/schemas/Money'
+        description:
+          type: string
+          description: Override printed description
+      required:
+      - item_id
+      - qty
+      - unit_id
+      - rate
+    BillChargeInput:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+          - labour
+          - transport
+          - other
+        description:
+          type: string
+        amount:
+          $ref: '#/components/schemas/Money'
+        gst_rate:
+          $ref: '#/components/schemas/GstRate'
+        sac_code:
+          type: string
+      required:
+      - kind
+      - amount
+    CustomerInput:
+      type: object
+      properties:
+        party_id:
+          $ref: '#/components/schemas/Id'
+        walk_in_name:
+          type: string
+          description: Cash bills only, when party_id is absent
+        gstin:
+          $ref: '#/components/schemas/GSTIN'
+        billing_address:
+          type: string
+        mobile:
+          type: string
+        site_address:
+          type: string
+      description: Either party_id, or walk_in_name for a walk-in Cash sale
+    BillInput:
+      type: object
+      properties:
+        bill_type:
+          type: string
+          enum:
+          - cash
+          - account
+        status:
+          type: string
+          enum:
+          - draft
+          - active
+          description: active = save and post
+        bill_date:
+          type: string
+          format: date
+        customer:
+          $ref: '#/components/schemas/CustomerInput'
+        place_of_supply:
+          $ref: '#/components/schemas/StateCode'
+        vehicle_no:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillLineInput'
+          minItems: 1
+        charges:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillChargeInput'
+        bill_discount:
+          $ref: '#/components/schemas/Money'
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentSplitInput'
+        notes:
+          type: string
+        override_credit_limit:
+          type: boolean
+          description: Super Admin only
+        expected_total:
+          $ref: '#/components/schemas/Money'
+          description: 'Optional: grand total shown on screen; server rejects with VALIDATION_FAILED if its own calculation
+            differs'
+      required:
+      - bill_type
+      - status
+      - customer
+      - place_of_supply
+      - lines
+    BillEditInput:
+      allOf:
+      - $ref: '#/components/schemas/BillInput'
+      - type: object
+        properties:
+          reason:
+            type: string
+            minLength: 3
+        required:
+        - reason
+    TaxSplit:
+      type: object
+      properties:
+        gst_rate:
+          $ref: '#/components/schemas/GstRate'
+        taxable:
+          $ref: '#/components/schemas/Money'
+        cgst:
+          $ref: '#/components/schemas/Money'
+        sgst:
+          $ref: '#/components/schemas/Money'
+        igst:
+          $ref: '#/components/schemas/Money'
+    BillTotals:
+      type: object
+      properties:
+        items_taxable:
+          $ref: '#/components/schemas/Money'
+        charges_taxable:
+          $ref: '#/components/schemas/Money'
+        bill_discount:
+          $ref: '#/components/schemas/Money'
+        taxable_total:
+          $ref: '#/components/schemas/Money'
+        cgst:
+          $ref: '#/components/schemas/Money'
+        sgst:
+          $ref: '#/components/schemas/Money'
+        igst:
+          $ref: '#/components/schemas/Money'
+        tax_by_rate:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaxSplit'
+        round_off:
+          $ref: '#/components/schemas/Money'
+        grand_total:
+          $ref: '#/components/schemas/Money'
+        amount_in_words:
+          type: string
+        amount_paid:
+          $ref: '#/components/schemas/Money'
+        balance_due:
+          $ref: '#/components/schemas/Money'
+      required:
+      - taxable_total
+      - grand_total
+    BillLine:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        line_no:
+          type: integer
+        item_id:
+          $ref: '#/components/schemas/Id'
+        location_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+        location_name:
+          oneOf:
+          - type: string
+          - type: 'null'
+        description:
+          type: string
+        hsn_code:
+          type: string
+        qty:
+          $ref: '#/components/schemas/Quantity'
+        unit_id:
+          $ref: '#/components/schemas/Id'
+        unit:
+          type: string
+        base_qty:
+          $ref: '#/components/schemas/Quantity'
+        rate:
+          $ref: '#/components/schemas/Money'
+        discount_pct:
+          $ref: '#/components/schemas/Percent'
+        discount_amt:
+          $ref: '#/components/schemas/Money'
+        taxable_value:
+          $ref: '#/components/schemas/Money'
+        gst_rate:
+          $ref: '#/components/schemas/GstRate'
+        cgst:
+          $ref: '#/components/schemas/Money'
+        sgst:
+          $ref: '#/components/schemas/Money'
+        igst:
+          $ref: '#/components/schemas/Money'
+        line_total:
+          $ref: '#/components/schemas/Money'
+        unit_cost:
+          oneOf:
+          - $ref: '#/components/schemas/Rate'
+          - type: 'null'
+    BillCharge:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        kind:
+          type: string
+          enum:
+          - labour
+          - transport
+          - other
+        description:
+          type: string
+        sac_code:
+          oneOf:
+          - type: string
+          - type: 'null'
+        amount:
+          $ref: '#/components/schemas/Money'
+        gst_rate:
+          $ref: '#/components/schemas/GstRate'
+        cgst:
+          $ref: '#/components/schemas/Money'
+        sgst:
+          $ref: '#/components/schemas/Money'
+        igst:
+          $ref: '#/components/schemas/Money'
+    EInvoice:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - not_required
+          - pending
+          - generated
+          - failed
+          - cancelled
+        irn:
+          oneOf:
+          - type: string
+          - type: 'null'
+        ack_no:
+          oneOf:
+          - type: string
+          - type: 'null'
+        ack_date:
+          oneOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        signed_qr:
+          oneOf:
+          - type: string
+          - type: 'null'
+        cancel_deadline:
+          oneOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: IRN generation time + 24 h
+        ewb_no:
+          oneOf:
+          - type: string
+          - type: 'null'
+        ewb_valid_until:
+          oneOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        last_error:
+          oneOf:
+          - type: string
+          - type: 'null'
+      required:
+      - status
+    BillSummary:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        bill_type:
+          type: string
+          enum:
+          - cash
+          - account
+        bill_no:
+          oneOf:
+          - type: string
+          - type: 'null'
+        bill_date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum:
+          - draft
+          - active
+          - cancelled
+        customer_name:
+          type: string
+        party_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+        grand_total:
+          $ref: '#/components/schemas/Money'
+        balance_due:
+          $ref: '#/components/schemas/Money'
+        payment_status:
+          type: string
+          enum:
+          - paid
+          - partial
+          - unpaid
+        einvoice_status:
+          type: string
+        is_account_copy:
+          type: boolean
+        source_bill_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+        account_copy_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+        version:
+          type: integer
+        created_by_name:
+          type: string
+      required:
+      - id
+      - bill_type
+      - bill_date
+      - status
+      - customer_name
+      - grand_total
+    Bill:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        bill_type:
+          type: string
+          enum:
+          - cash
+          - account
+        bill_no:
+          oneOf:
+          - type: string
+          - type: 'null'
+        fy:
+          oneOf:
+          - type: string
+          - type: 'null'
+        bill_date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum:
+          - draft
+          - active
+          - cancelled
+        version:
+          type: integer
+        source_bill:
+          oneOf:
+          - type: object
+            properties:
+              id:
+                $ref: '#/components/schemas/Id'
+              bill_no:
+                type: string
+          - type: 'null'
+        account_copy:
+          oneOf:
+          - type: object
+            properties:
+              id:
+                $ref: '#/components/schemas/Id'
+              bill_no:
+                type: string
+          - type: 'null'
+        customer:
+          type: object
+          properties:
+            party_id:
+              oneOf:
+              - $ref: '#/components/schemas/Id'
+              - type: 'null'
+            name:
+              type: string
+            gstin:
+              oneOf:
+              - type: string
+              - type: 'null'
+            address:
+              oneOf:
+              - type: string
+              - type: 'null'
+            mobile:
+              oneOf:
+              - type: string
+              - type: 'null'
+            site_address:
+              oneOf:
+              - type: string
+              - type: 'null'
+        place_of_supply:
+          $ref: '#/components/schemas/StateCode'
+        is_interstate:
+          type: boolean
+        vehicle_no:
+          oneOf:
+          - type: string
+          - type: 'null'
+        affects_stock:
+          type: boolean
+        posts_to_ledger:
+          type: boolean
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillLine'
+        charges:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillCharge'
+        totals:
+          $ref: '#/components/schemas/BillTotals'
+        payments:
+          type: array
+          items:
+            type: object
+            properties:
+              payment_id:
+                $ref: '#/components/schemas/Id'
+              doc_no:
+                type: string
+              mode:
+                type: string
+              amount:
+                $ref: '#/components/schemas/Money'
+              date:
+                type: string
+                format: date
+        cost_total:
+          $ref: '#/components/schemas/Money'
+        gross_profit:
+          $ref: '#/components/schemas/Money'
+        einvoice:
+          $ref: '#/components/schemas/EInvoice'
+        notes:
+          oneOf:
+          - type: string
+          - type: 'null'
+        allowed_actions:
+          type: array
+          items:
+            type: string
+            enum:
+            - edit
+            - cancel
+            - copy_to_account
+            - record_payment
+            - create_return
+            - generate_einvoice
+            - cancel_einvoice
+            - generate_ewaybill
+            - print
+            - share
+          description: Computed by the server from role, status and the 24-hour IRN window
+        cancel_reason:
+          oneOf:
+          - type: string
+          - type: 'null'
+        created_by_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - bill_type
+      - bill_date
+      - status
+      - version
+      - customer
+      - lines
+      - totals
+      - einvoice
+      - allowed_actions
+    BillRevision:
+      type: object
+      properties:
+        version:
+          type: integer
+        reason:
+          type: string
+        edited_by_name:
+          type: string
+        edited_at:
+          type: string
+          format: date-time
+        snapshot:
+          $ref: '#/components/schemas/Bill'
+    CopyToAccountInput:
+      type: object
+      properties:
+        bill_date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum:
+          - draft
+          - active
+        notes:
+          type: string
+      description: Creates the Account bill from the Cash bill; draft lets the user review first
+    PaymentInput:
+      type: object
+      properties:
+        direction:
+          type: string
+          enum:
+          - received
+          - paid
+        party_id:
+          $ref: '#/components/schemas/Id'
+        pay_date:
+          type: string
+          format: date
+        mode:
+          type: string
+          enum:
+          - cash
+          - upi
+          - cheque
+          - bank_transfer
+        amount:
+          $ref: '#/components/schemas/Money'
+        reference:
+          type: string
+        cheque_no:
+          type: string
+        cheque_date:
+          type: string
+          format: date
+        bank_name:
+          type: string
+        notes:
+          type: string
+        allocations:
+          type: array
+          items:
+            type: object
+            properties:
+              ref_type:
+                type: string
+                enum:
+                - cash_bill
+                - account_bill
+                - purchase
+              ref_id:
+                $ref: '#/components/schemas/Id'
+              amount:
+                $ref: '#/components/schemas/Money'
+            required:
+            - ref_type
+            - ref_id
+            - amount
+          description: Empty = on account; server can auto-allocate oldest first when auto_allocate=true
+        auto_allocate:
+          type: boolean
+      required:
+      - direction
+      - party_id
+      - mode
+      - amount
+    Payment:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        doc_no:
+          type: string
+        direction:
+          type: string
+          enum:
+          - received
+          - paid
+        party_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+          description: Null only for walk-in cash taken on a bill (schema.sql payment.party_id)
+        party_name:
+          type: string
+        pay_date:
+          type: string
+          format: date
+        mode:
+          type: string
+        amount:
+          $ref: '#/components/schemas/Money'
+        reference:
+          oneOf:
+          - type: string
+          - type: 'null'
+        cheque_no:
+          oneOf:
+          - type: string
+          - type: 'null'
+        cheque_date:
+          oneOf:
+          - type: string
+            format: date
+          - type: 'null'
+        bank_name:
+          oneOf:
+          - type: string
+          - type: 'null'
+        cheque_status:
+          oneOf:
+          - type: string
+            enum:
+            - pending
+            - cleared
+            - bounced
+          - type: 'null'
+        status:
+          type: string
+          enum:
+          - active
+          - cancelled
+        allocations:
+          type: array
+          items:
+            type: object
+            properties:
+              ref_type:
+                type: string
+              ref_id:
+                $ref: '#/components/schemas/Id'
+              ref_no:
+                type: string
+              amount:
+                $ref: '#/components/schemas/Money'
+        unallocated:
+          $ref: '#/components/schemas/Money'
+      required:
+      - id
+      - doc_no
+      - direction
+      - party_id
+      - mode
+      - amount
+    ReturnInput:
+      type: object
+      properties:
+        bill_id:
+          $ref: '#/components/schemas/Id'
+        cn_date:
+          type: string
+          format: date
+        reason:
+          type: string
+        settlement:
+          type: string
+          enum:
+          - refund
+          - adjust_ledger
+        refund:
+          $ref: '#/components/schemas/PaymentSplitInput'
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              bill_line_id:
+                $ref: '#/components/schemas/Id'
+              qty:
+                $ref: '#/components/schemas/Quantity'
+              unit_id:
+                $ref: '#/components/schemas/Id'
+              location_id:
+                $ref: '#/components/schemas/Id'
+              restock:
+                type: boolean
+            required:
+            - bill_line_id
+            - qty
+            - unit_id
+          minItems: 1
+      required:
+      - bill_id
+      - reason
+      - settlement
+      - lines
+    CreditNote:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        cn_no:
+          oneOf:
+          - type: string
+          - type: 'null'
+        cn_date:
+          type: string
+          format: date
+        bill_id:
+          $ref: '#/components/schemas/Id'
+        bill_no:
+          type: string
+        party_name:
+          type: string
+        status:
+          type: string
+          enum:
+          - pending
+          - approved
+          - rejected
+          - cancelled
+        reason:
+          type: string
+        settlement:
+          type: string
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              bill_line_id:
+                $ref: '#/components/schemas/Id'
+              item_id:
+                $ref: '#/components/schemas/Id'
+              description:
+                type: string
+              qty:
+                $ref: '#/components/schemas/Quantity'
+              unit:
+                type: string
+              location_id:
+                $ref: '#/components/schemas/Id'
+              rate:
+                $ref: '#/components/schemas/Money'
+              taxable_value:
+                $ref: '#/components/schemas/Money'
+              restock:
+                type: boolean
+        totals:
+          $ref: '#/components/schemas/BillTotals'
+        einvoice:
+          $ref: '#/components/schemas/EInvoice'
+        created_by_name:
+          type: string
+        approved_by_name:
+          oneOf:
+          - type: string
+          - type: 'null'
+        approved_at:
+          oneOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+      required:
+      - id
+      - bill_id
+      - status
+    PurchaseInput:
+      type: object
+      properties:
+        supplier_id:
+          $ref: '#/components/schemas/Id'
+        supplier_invoice_no:
+          type: string
+        supplier_invoice_dt:
+          type: string
+          format: date
+        received_date:
+          type: string
+          format: date
+        location_id:
+          $ref: '#/components/schemas/Id'
+        is_interstate:
+          type: boolean
+        freight:
+          $ref: '#/components/schemas/Money'
+        other_charges:
+          $ref: '#/components/schemas/Money'
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/Id'
+              location_id:
+                $ref: '#/components/schemas/Id'
+              qty:
+                $ref: '#/components/schemas/Quantity'
+              unit_id:
+                $ref: '#/components/schemas/Id'
+              rate:
+                $ref: '#/components/schemas/Rate'
+              discount_amt:
+                $ref: '#/components/schemas/Money'
+              gst_rate:
+                $ref: '#/components/schemas/GstRate'
+            required:
+            - item_id
+            - qty
+            - unit_id
+            - rate
+          minItems: 1
+        payment:
+          $ref: '#/components/schemas/PaymentSplitInput'
+        notes:
+          type: string
+      required:
+      - supplier_id
+      - supplier_invoice_no
+      - supplier_invoice_dt
+      - location_id
+      - lines
+    Purchase:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        doc_no:
+          type: string
+        supplier_id:
+          $ref: '#/components/schemas/Id'
+        supplier_name:
+          type: string
+        supplier_invoice_no:
+          type: string
+        supplier_invoice_dt:
+          type: string
+          format: date
+        received_date:
+          type: string
+          format: date
+        location_id:
+          $ref: '#/components/schemas/Id'
+        location_name:
+          type: string
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                $ref: '#/components/schemas/Id'
+              item_id:
+                $ref: '#/components/schemas/Id'
+              item_name:
+                type: string
+              location_id:
+                $ref: '#/components/schemas/Id'
+              qty:
+                $ref: '#/components/schemas/Quantity'
+              unit:
+                type: string
+              base_qty:
+                $ref: '#/components/schemas/Quantity'
+              rate:
+                $ref: '#/components/schemas/Rate'
+              taxable_value:
+                $ref: '#/components/schemas/Money'
+              gst_rate:
+                $ref: '#/components/schemas/GstRate'
+              landed_unit_cost:
+                $ref: '#/components/schemas/Rate'
+        totals:
+          $ref: '#/components/schemas/BillTotals'
+        status:
+          type: string
+          enum:
+          - active
+          - cancelled
+        balance_payable:
+          $ref: '#/components/schemas/Money'
+      required:
+      - id
+      - doc_no
+      - supplier_id
+      - lines
+      - totals
+    PurchaseReturnInput:
+      type: object
+      properties:
+        purchase_id:
+          $ref: '#/components/schemas/Id'
+        return_date:
+          type: string
+          format: date
+        reason:
+          type: string
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              purchase_line_id:
+                $ref: '#/components/schemas/Id'
+              qty:
+                $ref: '#/components/schemas/Quantity'
+              unit_id:
+                $ref: '#/components/schemas/Id'
+            required:
+            - purchase_line_id
+            - qty
+            - unit_id
+      required:
+      - purchase_id
+      - reason
+      - lines
+    TransferInput:
+      type: object
+      properties:
+        from_location_id:
+          $ref: '#/components/schemas/Id'
+        to_location_id:
+          $ref: '#/components/schemas/Id'
+        transfer_date:
+          type: string
+          format: date
+        vehicle_no:
+          type: string
+        notes:
+          type: string
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/Id'
+              qty:
+                $ref: '#/components/schemas/Quantity'
+              unit_id:
+                $ref: '#/components/schemas/Id'
+            required:
+            - item_id
+            - qty
+            - unit_id
+          minItems: 1
+      required:
+      - from_location_id
+      - to_location_id
+      - lines
+    Transfer:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        doc_no:
+          type: string
+        transfer_date:
+          type: string
+          format: date
+        from_location_id:
+          $ref: '#/components/schemas/Id'
+        to_location_id:
+          $ref: '#/components/schemas/Id'
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/Id'
+              item_name:
+                type: string
+              base_qty:
+                $ref: '#/components/schemas/Quantity'
+              unit:
+                type: string
+        created_by_name:
+          type: string
+    AdjustmentInput:
+      type: object
+      properties:
+        location_id:
+          $ref: '#/components/schemas/Id'
+        adj_date:
+          type: string
+          format: date
+        reason:
+          type: string
+          enum:
+          - damage
+          - breakage
+          - wastage
+          - count_correction
+          - sample
+          - other
+        notes:
+          type: string
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/Id'
+              qty_change:
+                $ref: '#/components/schemas/Quantity'
+                description: Positive adds, negative removes (base unit)
+            required:
+            - item_id
+            - qty_change
+          minItems: 1
+      required:
+      - location_id
+      - reason
+      - lines
+    Adjustment:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        doc_no:
+          type: string
+        adj_date:
+          type: string
+          format: date
+        location_id:
+          $ref: '#/components/schemas/Id'
+        reason:
+          type: string
+        notes:
+          oneOf:
+          - type: string
+          - type: 'null'
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/Id'
+              item_name:
+                type: string
+              qty_change:
+                $ref: '#/components/schemas/Quantity'
+        created_by_name:
+          type: string
+    StockCountInput:
+      type: object
+      properties:
+        location_id:
+          $ref: '#/components/schemas/Id'
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/Id'
+              counted_qty:
+                $ref: '#/components/schemas/Quantity'
+            required:
+            - item_id
+            - counted_qty
+      required:
+      - location_id
+      - lines
+    StockCountPreview:
+      type: object
+      properties:
+        location_id:
+          $ref: '#/components/schemas/Id'
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/Id'
+              item_name:
+                type: string
+              system_qty:
+                $ref: '#/components/schemas/Quantity'
+              counted_qty:
+                $ref: '#/components/schemas/Quantity'
+              difference:
+                $ref: '#/components/schemas/Quantity'
+              value_difference:
+                $ref: '#/components/schemas/Money'
+    DashboardSummary:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from:
+              type: string
+              format: date
+            to:
+              type: string
+              format: date
+        stock:
+          type: object
+          properties:
+            items:
+              type: integer
+            value:
+              $ref: '#/components/schemas/Money'
+            low_count:
+              type: integer
+            out_count:
+              type: integer
+            by_location:
+              type: array
+              items:
+                type: object
+                properties:
+                  location_id:
+                    $ref: '#/components/schemas/Id'
+                  name:
+                    type: string
+                  value:
+                    $ref: '#/components/schemas/Money'
+        sales:
+          type: object
+          properties:
+            today:
+              $ref: '#/components/schemas/Money'
+            period:
+              $ref: '#/components/schemas/Money'
+            fy:
+              $ref: '#/components/schemas/Money'
+            cash_bills:
+              $ref: '#/components/schemas/Money'
+            account_bills:
+              $ref: '#/components/schemas/Money'
+            bill_count:
+              type: integer
+        gross_profit:
+          $ref: '#/components/schemas/Money'
+        gross_margin_pct:
+          type: string
+          pattern: ^-?\d{1,6}(\.\d{1,2})?$
+          description: Gross profit as % of items' taxable value; negative when goods were sold below cost
+          examples:
+          - '18.25'
+        receivables:
+          $ref: '#/components/schemas/Money'
+        payables:
+          $ref: '#/components/schemas/Money'
+        cheques_pending:
+          $ref: '#/components/schemas/Money'
+        collections_by_mode:
+          type: array
+          items:
+            type: object
+            properties:
+              mode:
+                type: string
+              amount:
+                $ref: '#/components/schemas/Money'
+    TrendPoint:
+      type: object
+      properties:
+        bucket:
+          type: string
+          description: YYYY-MM-DD or YYYY-MM
+        sales:
+          $ref: '#/components/schemas/Money'
+        profit:
+          $ref: '#/components/schemas/Money'
+        bills:
+          type: integer
+    CategoryBreakdown:
+      type: object
+      properties:
+        category_id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+        stock_qty_items:
+          type: integer
+        stock_value:
+          $ref: '#/components/schemas/Money'
+        sales:
+          $ref: '#/components/schemas/Money'
+        profit:
+          $ref: '#/components/schemas/Money'
+    TopItem:
+      type: object
+      properties:
+        item_id:
+          $ref: '#/components/schemas/Id'
+        name:
+          type: string
+        qty_sold:
+          $ref: '#/components/schemas/Quantity'
+        unit:
+          type: string
+        sales:
+          $ref: '#/components/schemas/Money'
+    PendingWork:
+      type: object
+      properties:
+        einvoice_failed:
+          type: integer
+        einvoice_pending:
+          type: integer
+        returns_pending:
+          type: integer
+        blocked_bills_today:
+          type: integer
+        tally_unexported:
+          type: integer
+        cheques_due:
+          type: integer
+    Notification:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        kind:
+          type: string
+          enum:
+          - stock_short
+          - low_stock
+          - return_pending
+          - einv_failed
+          - backup_failed
+          - other
+        title:
+          type: string
+        body:
+          oneOf:
+          - type: string
+          - type: 'null'
+        ref_type:
+          oneOf:
+          - type: string
+          - type: 'null'
+        ref_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+        item_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+        is_read:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - kind
+      - title
+      - is_read
+      - created_at
+    TallyImportPreview:
+      type: object
+      properties:
+        import_id:
+          $ref: '#/components/schemas/Id'
+        source:
+          type: string
+          enum:
+          - tally_xml
+          - excel
+        cutover_date:
+          type: string
+          format: date
+        counts:
+          type: object
+          properties: {}
+          additionalProperties:
+            type: object
+            properties:
+              new:
+                type: integer
+              existing:
+                type: integer
+              errors:
+                type: integer
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              entity:
+                type: string
+              name:
+                type: string
+              problem:
+                type: string
+              suggestion:
+                type: string
+        expires_at:
+          type: string
+          format: date-time
+    TallyExportInput:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        scope:
+          type: array
+          items:
+            type: string
+            enum:
+            - masters
+            - sales
+            - credit_notes
+            - receipts
+            - purchases
+            - payments
+        include_already_exported:
+          type: boolean
+      required:
+      - from
+      - to
+      - scope
+    TallySync:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        direction:
+          type: string
+          enum:
+          - import
+          - export
+        scope:
+          type: string
+        period_from:
+          oneOf:
+          - type: string
+            format: date
+          - type: 'null'
+        period_to:
+          oneOf:
+          - type: string
+            format: date
+          - type: 'null'
+        record_count:
+          type: integer
+        status:
+          type: string
+        created_by_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AuditEntry:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        user_name:
+          oneOf:
+          - type: string
+          - type: 'null'
+        action:
+          type: string
+        entity:
+          type: string
+        entity_id:
+          oneOf:
+          - $ref: '#/components/schemas/Id'
+          - type: 'null'
+        before:
+          oneOf:
+          - type: object
+            properties: {}
+          - type: 'null'
+        after:
+          oneOf:
+          - type: object
+            properties: {}
+          - type: 'null'
+        ip_address:
+          oneOf:
+          - type: string
+          - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+    SearchResult:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                $ref: '#/components/schemas/Id'
+              name:
+                type: string
+              stock_total:
+                $ref: '#/components/schemas/Quantity'
+        parties:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                $ref: '#/components/schemas/Id'
+              name:
+                type: string
+              mobile:
+                type: string
+        bills:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                $ref: '#/components/schemas/Id'
+              bill_no:
+                type: string
+              customer_name:
+                type: string
+              grand_total:
+                $ref: '#/components/schemas/Money'
